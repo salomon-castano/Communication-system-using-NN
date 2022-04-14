@@ -2,12 +2,12 @@ classdef DSP_class
    properties
        
        % default values
-       fc = 900e6;       % carrier frequency in Hz
-       rb = 60e3;        % symbols (bits) per second
-       ss = 5;           % samples per symbol
+       fc = 868e6;       % carrier frequency in Hz
+       rb = 50e3;        % symbols (bits) per second
+       ss = 8;           % samples per symbol
        QAM = 4;          % size of QAM constellation
        plen = 26;        % preamble length
-       delay = 500;      % approximate delay of the transmitter
+       delay = 50;       % approximate delay of the transmitter
        fs                % samples per frame
        rs                % samples per second
        ls                %symbols per letter
@@ -16,8 +16,6 @@ classdef DSP_class
        
        % dependable variables and System Objects
        preamble
-       txFilter
-       rxFilter
        txFIR
        rxFIR
        tx
@@ -32,6 +30,7 @@ classdef DSP_class
    end
    methods
       function a = setup(a, message) 
+          
             % dependable var and System Objects initicalization
                         
             a.rs = a.ss*a.rb;   % samples per second
@@ -43,23 +42,15 @@ classdef DSP_class
             a.preamble = comm.BarkerCode('SamplesPerFrame', a.plen,...
                'Length',13); 
            
-           if a.QAM > 2
+            if a.QAM > 2
                a.preamble = (log2(a.QAM)-1)*complex(a.preamble(),...
                    fliplr(a.preamble()')');
-           else
+            else
                a.preamble = a.preamble();
-           end
+            end
            
-           % samples per frame
-           a.fs = (2*a.plen + 2*a.mlen )*a.ss; 
-           
-            a.txFilter = comm.RaisedCosineTransmitFilter( ...
-                'OutputSamplesPerSymbol',a.ss,...
-                'FilterSpanInSymbols',1);
-            
-            a.rxFilter = comm.RaisedCosineReceiveFilter(...
-                'InputSamplesPerSymbol',a.ss,'DecimationFactor',a.ss,...
-                'FilterSpanInSymbols',1);
+            % samples per frame
+            a.fs = (2*a.plen + 2*a.mlen )*a.ss;
             
             a.txFIR = dsp.FIRInterpolator('InterpolationFactor', a.ss,...
                 'Numerator', firpm(100,[0 1/a.ss 2/a.ss 1],...
@@ -75,29 +66,30 @@ classdef DSP_class
                 'BasebandSampleRate', a.rs, 'GainSource', ...
                 'Manual', 'Gain', 20, 'SamplesPerFrame',...
                 a.fs, 'OutputDataType', 'single');
-%             a.rx.ShowAdvancedProperties = true;
-%             a.rx.EnableQuadratureTracking = false;
-%             a.rx.EnableRFDCTracking = false;
-%             a.rx.EnableBasebandDCTracking =  false;
-            
-            % Increase frequency offset and phase offset to degrade signal
-            a.pfo = comm.PhaseFrequencyOffset('PhaseOffset', 237,...
-                'FrequencyOffset', 223, 'SampleRate',a.rs);
-            % Decrease EbNo to degrade signal
-            a.channel=comm.AWGNChannel('SamplesPerSymbol',a.ss,'EbNo',50);
-            
+                                  
             a.syntonize = comm.CoarseFrequencyCompensator(...
                 'SampleRate',a.rs, 'FrequencyResolution',1);
+            
             a.synchronize = comm.CarrierSynchronizer( ...
                 'SamplesPerSymbol',a.ss);
+            
             a.preamble_detector = comm.PreambleDetector(a.preamble,...
                 'Threshold',3,'Detections','All');
+            
             a.slope_detector = comm.PreambleDetector(repelem([-1;1],...
                 a.ss), 'Threshold',10,'Detections','First');
+            
+           % simulation Ojects
+           % Increase frequency offset and phase offset to degrade signal
+           a.pfo = comm.PhaseFrequencyOffset('PhaseOffset', 237,...
+               'FrequencyOffset', 223, 'SampleRate',a.rs);
+           % Decrease EbNo to degrade signal
+           a.channel=comm.AWGNChannel('SamplesPerSymbol',a.ss,'EbNo',50);
             
       end
        
       function signal_in = encode(a, message)
+          
           % encodes the message into a vector using ASCII in base a.QAM
           m = dec2base(message, a.QAM, a.ls);
           m = reshape(m', numel(m), []);
@@ -107,53 +99,54 @@ classdef DSP_class
           QAM_signal = qammod(signal_dec, a.QAM);
           
           % inerpolation and optimal filter for ISI
-          signal_in = QAM_signal;         
+          signal_in = QAM_signal;    
+          
       end
       
       function signal_out = propagate(a, signal_in)
-          
-          %transmits signal
-%           signal_tx = a.txFilter([a.preamble(a.plen/2+1:end);...
-%               signal_in; a.preamble(1:a.plen/2)]);
 
           signal_tx = a.txFIR([a.preamble; signal_in; a.preamble]);
           signal_tx = 2*signal_tx(51 + (a.plen/2)*a.ss : ...
               50 + end - (a.plen/2)*a.ss);
-
-          plot(real(signal_tx))
-
+            
+          % transmits signal
           a.tx.transmitRepeat(signal_tx);
           
           % receives signal
-          signal_out = a.rx();
+          signal_tx = a.rx();
+          signal_out = signal_tx/max(abs(signal_tx));
+          
       end
       
       function signal_out = simulate(a, signal_in)
           
           % transmitted signal
-          signal_tx = a.txFilter([signal_in; zeros(a.delay,1)]);
-%           scatterplot(signal_tx)
+          signal_tx = a.txFilter([a.preamble(a.plen/2-1:end);...
+              signal_in; a.preamble(1:a.plen/2)]);
           
           % received signal
-          signal_out = a.rxFilter(a.channel(a.pfo(signal_tx)));
-%           scatterplot(signal_out)
-
-%           signal_out = awgn(signal_in,18,'measured');
-            
-%           signal_out =signal_in;
+          signal_tx = a.rxFilter(a.channel(a.pfo(signal_tx)));
+          signal_out = signal_tx/max(abs(signal_tx));
+          
       end
       
       function [preamble_cond, signal_cond] = conditioning(a, signal_out)
           
-          % synchronization of the signal
-%           signal_sync = a.syntonize(signal_out);
-%           signal_sync = a.synchronize(signal_sync);
-          signal_sync = signal_out;
+          signal_synt = a.syntonize(signal_out);
+          signal_sync = a.synchronize(signal_synt);
+
+          [~, slope] = a.slope_detector(imag(signal_sync));
+          [~, index] = max(slope);
+          align = mod(index - a.ss/2, a.ss);
+          signal_align = signal_out(1+align:end+align-a.ss);
+
+          signal_filtered = 2*a.rxFIR(signal_align);
+            
           % locating the preamble
-          [~, correlation] = a.preamble_detector(signal_sync);
+          [~, correlation] = a.preamble_detector(signal_filtered);
           [~, index] = maxk(correlation, 2);
           data_end = index(1) + a.mlen;
-          if data_end <= length(signal_sync)
+          if data_end <= length(signal_filtered)
               data_start = index(1) + 1;
           else
               data_end = index(2) + a.mlen;
@@ -161,23 +154,14 @@ classdef DSP_class
           end
           preamble_start = data_start - a.plen;
           
-%         phase correction 2.0 (corrects only by n*pi/4 where n is int)
-          preamble_sync = signal_sync(preamble_start:data_start-1);
+          % phase correction 2.0 (corrects only by n*pi/4 where n is int)
+          preamble_filtered = signal_filtered(preamble_start:data_start-1);
 
           phase_offset = (mean(exp(1i*(angle(a.preamble(...
-              end-a.plen+1:end)) - angle(preamble_sync)))));
-          signal_cond =signal_sync(data_start:data_end).*phase_offset;
-          preamble_cond = preamble_sync.*phase_offset;
-          
-          % position correction
-
-%           position_offset = mean(a.preamble(end-a.plen+1:end) - ...
-%               preamble_sync);
-%           signal_cond =signal_sync(data_start:data_end) + position_offset;
-%           preamble_cond = preamble_sync + position_offset;
-          
-%           signal_cond =signal_sync(data_start:data_end);
-%           preamble_cond = preamble_sync;
+              end-a.plen+1:end)) - angle(preamble_filtered)))));
+          signal_cond =signal_filtered(data_start:data_end).*phase_offset;
+          preamble_cond = preamble_filtered.*phase_offset;
+         
       end 
       
       function message_out = decode(a, signal)
@@ -185,14 +169,13 @@ classdef DSP_class
           z = dec2base(qamdemod(signal,a.QAM), a.QAM);
           z = reshape(z, a.ls, [])';
           message_out = char(base2dec(z,a.QAM))';
+          
       end
                 
       function release(a)
-%           release(a.preamble())
+          
           release(a.tx)
           release(a.rx)
-%           Release(a.txFilter)
-%           release(a.rxFilter)
           release(a.pfo)
           release(a.channel)
           release(a.syntonize)
