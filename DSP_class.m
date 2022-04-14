@@ -11,13 +11,15 @@ classdef DSP_class
        fs                % samples per frame
        rs                % samples per second
        ls                %symbols per letter
-       mlen               % message length
+       mlen              % message length
        
        
        % dependable variables and System Objects
        preamble
        txFilter
        rxFilter
+       txFIR
+       rxFIR
        tx
        rx
        pfo
@@ -25,6 +27,7 @@ classdef DSP_class
        syntonize
        synchronize
        preamble_detector
+       slope_detector
        
    end
    methods
@@ -41,13 +44,14 @@ classdef DSP_class
                'Length',13); 
            
            if a.QAM > 2
-               a.preamble = complex(a.preamble(),fliplr(a.preamble()));
+               a.preamble = (log2(a.QAM)-1)*complex(a.preamble(),...
+                   fliplr(a.preamble()')');
            else
                a.preamble = a.preamble();
            end
            
            % samples per frame
-           a.fs = 2*(length(a.preamble) + a.mlen - 1)*a.ss; 
+           a.fs = (2*a.plen + 2*a.mlen )*a.ss; 
            
             a.txFilter = comm.RaisedCosineTransmitFilter( ...
                 'OutputSamplesPerSymbol',a.ss,...
@@ -56,14 +60,26 @@ classdef DSP_class
             a.rxFilter = comm.RaisedCosineReceiveFilter(...
                 'InputSamplesPerSymbol',a.ss,'DecimationFactor',a.ss,...
                 'FilterSpanInSymbols',1);
+            
+            a.txFIR = dsp.FIRInterpolator('InterpolationFactor', a.ss,...
+                'Numerator', firpm(100,[0 1/a.ss 2/a.ss 1],...
+                [1 1 0 0], [1 1]));
+            a.rxFIR = dsp.FIRDecimator('DecimationFactor', a.ss,...
+                'Numerator', firpm(100,[0 1/a.ss  2/a.ss 1],...
+                [1 1 0 0], [1 1]));
            
             a.tx = sdrtx('Pluto', 'CenterFrequency', a.fc,...
-                'BasebandSampleRate', a.rs, 'Gain', -13);
+                'BasebandSampleRate', a.rs, 'Gain', -20);
 
             a.rx = sdrrx('Pluto', 'CenterFrequency', a.fc,...
                 'BasebandSampleRate', a.rs, 'GainSource', ...
-                'Manual', 'Gain', 40, 'SamplesPerFrame',...
+                'Manual', 'Gain', 20, 'SamplesPerFrame',...
                 a.fs, 'OutputDataType', 'single');
+%             a.rx.ShowAdvancedProperties = true;
+%             a.rx.EnableQuadratureTracking = false;
+%             a.rx.EnableRFDCTracking = false;
+%             a.rx.EnableBasebandDCTracking =  false;
+            
             % Increase frequency offset and phase offset to degrade signal
             a.pfo = comm.PhaseFrequencyOffset('PhaseOffset', 237,...
                 'FrequencyOffset', 223, 'SampleRate',a.rs);
@@ -76,6 +92,9 @@ classdef DSP_class
                 'SamplesPerSymbol',a.ss);
             a.preamble_detector = comm.PreambleDetector(a.preamble,...
                 'Threshold',3,'Detections','All');
+            a.slope_detector = comm.PreambleDetector(repelem([-1;1],...
+                a.ss), 'Threshold',10,'Detections','First');
+            
       end
        
       function signal_in = encode(a, message)
@@ -88,18 +107,25 @@ classdef DSP_class
           QAM_signal = qammod(signal_dec, a.QAM);
           
           % inerpolation and optimal filter for ISI
-          signal_in = [a.preamble; QAM_signal];          
+          signal_in = QAM_signal;         
       end
       
       function signal_out = propagate(a, signal_in)
           
           %transmits signal
-          signal_tx = a.txFilter(signal_in);
-          
+%           signal_tx = a.txFilter([a.preamble(a.plen/2+1:end);...
+%               signal_in; a.preamble(1:a.plen/2)]);
+
+          signal_tx = a.txFIR([a.preamble; signal_in; a.preamble]);
+          signal_tx = 2*signal_tx(51 + (a.plen/2)*a.ss : ...
+              50 + end - (a.plen/2)*a.ss);
+
+          plot(real(signal_tx))
+
           a.tx.transmitRepeat(signal_tx);
           
           % receives signal
-          signal_out = a.rxFilter(a.rx());
+          signal_out = a.rx();
       end
       
       function signal_out = simulate(a, signal_in)
@@ -120,14 +146,14 @@ classdef DSP_class
       function [preamble_cond, signal_cond] = conditioning(a, signal_out)
           
           % synchronization of the signal
-          signal_sync = a.syntonize(signal_out);
-          signal_sync = a.synchronize(signal_sync);
-          
+%           signal_sync = a.syntonize(signal_out);
+%           signal_sync = a.synchronize(signal_sync);
+          signal_sync = signal_out;
           % locating the preamble
           [~, correlation] = a.preamble_detector(signal_sync);
           [~, index] = maxk(correlation, 2);
           data_end = index(1) + a.mlen;
-          if data_end < length(signal_sync)
+          if data_end <= length(signal_sync)
               data_start = index(1) + 1;
           else
               data_end = index(2) + a.mlen;
@@ -142,7 +168,14 @@ classdef DSP_class
               end-a.plen+1:end)) - angle(preamble_sync)))));
           signal_cond =signal_sync(data_start:data_end).*phase_offset;
           preamble_cond = preamble_sync.*phase_offset;
+          
+          % position correction
 
+%           position_offset = mean(a.preamble(end-a.plen+1:end) - ...
+%               preamble_sync);
+%           signal_cond =signal_sync(data_start:data_end) + position_offset;
+%           preamble_cond = preamble_sync + position_offset;
+          
 %           signal_cond =signal_sync(data_start:data_end);
 %           preamble_cond = preamble_sync;
       end 
@@ -153,9 +186,7 @@ classdef DSP_class
           z = reshape(z, a.ls, [])';
           message_out = char(base2dec(z,a.QAM))';
       end
-          
-          
-      
+                
       function release(a)
 %           release(a.preamble())
           release(a.tx)
