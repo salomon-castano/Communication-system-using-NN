@@ -5,17 +5,20 @@ classdef DSP_class
        fc = 868e6;       % carrier frequency in Hz
        rb = 50e3;        % symbols (bits) per second
        ss = 8;           % samples per symbol
+       fco = 1;          % normalized cutoff frequency 
        QAM = 4;          % size of QAM constellation
        plen = 26;        % preamble length
        delay = 50;       % approximate delay of the transmitter
        fs                % samples per frame
        rs                % samples per second
-       ls                %symbols per letter
+       ls                % symbols per letter
        mlen              % message length
-       
+       flen              % FIR filters length
+       preamble          % preamble
        
        % dependable variables and System Objects
-       preamble
+       
+       preamble_maker
        txFIR
        rxFIR
        tx
@@ -25,7 +28,6 @@ classdef DSP_class
        syntonize
        synchronize
        preamble_detector
-       slope_detector
        
    end
    methods
@@ -38,33 +40,38 @@ classdef DSP_class
             a.ls = int32(8/log2(a.QAM)); %symbols per letter
             
             a.mlen = length(message)*a.ls; % message length in QAM symbols
-          
-            a.preamble = comm.BarkerCode('SamplesPerFrame', a.plen,...
-               'Length',13); 
+            
+            a.flen = a.ss*8;        % FIR filters length
+            
+            a.preamble_maker = comm.BarkerCode('SamplesPerFrame',...
+            a.plen, 'Length',13); 
            
             if a.QAM > 2
-               a.preamble = (log2(a.QAM)-1)*complex(a.preamble(),...
-                   fliplr(a.preamble()')');
+               a.preamble = (log2(a.QAM)-1)*complex(a.preamble_maker(),...
+                   fliplr(a.preamble_maker()')');
             else
-               a.preamble = a.preamble();
+               a.preamble = a.preamble_maker();
             end
            
             % samples per frame
             a.fs = (2*a.plen + 2*a.mlen )*a.ss;
             
             a.txFIR = dsp.FIRInterpolator('InterpolationFactor', a.ss,...
-                'Numerator', firpm(100,[0 1/a.ss 2/a.ss 1],...
-                [1 1 0 0], [1 1]));
+                'Numerator', firpm(2*a.flen,[0 a.fco/a.ss 2*a.fco/a.ss,...
+                1], [1 1 0 0], [1 1]));
+            % sets the initial conditions for the FIR
+            a.txFIR(a.preamble(end-ceil(a.flen/a.ss):end)); 
+                        
             a.rxFIR = dsp.FIRDecimator('DecimationFactor', a.ss,...
-                'Numerator', firpm(100,[0 1/a.ss  2/a.ss 1],...
-                [1 1 0 0], [1 1]));
-           
+                'Numerator', firpm(2*a.flen,[0 a.fco/a.ss 2*a.fco/a.ss,...
+                1], [1 1 0 0], [1 1]));
+            
             a.tx = sdrtx('Pluto', 'CenterFrequency', a.fc,...
-                'BasebandSampleRate', a.rs, 'Gain', -20);
+                'BasebandSampleRate', a.rs, 'Gain', -50);
 
             a.rx = sdrrx('Pluto', 'CenterFrequency', a.fc,...
                 'BasebandSampleRate', a.rs, 'GainSource', ...
-                'Manual', 'Gain', 20, 'SamplesPerFrame',...
+                'Manual', 'Gain', 50, 'SamplesPerFrame',...
                 a.fs, 'OutputDataType', 'single');
                                   
             a.syntonize = comm.CoarseFrequencyCompensator(...
@@ -73,12 +80,10 @@ classdef DSP_class
             a.synchronize = comm.CarrierSynchronizer( ...
                 'SamplesPerSymbol',a.ss);
             
-            a.preamble_detector = comm.PreambleDetector(a.preamble,...
-                'Threshold',3,'Detections','All');
-            
-            a.slope_detector = comm.PreambleDetector(repelem([-1;1],...
-                a.ss), 'Threshold',10,'Detections','First');
-            
+            a.preamble_detector = comm.PreambleDetector(circshift(...
+                a.txFIR(a.preamble), - a.flen), 'Threshold',...
+                3,'Detections','All');
+                        
            % simulation Ojects
            % Increase frequency offset and phase offset to degrade signal
            a.pfo = comm.PhaseFrequencyOffset('PhaseOffset', 237,...
@@ -105,10 +110,10 @@ classdef DSP_class
       
       function signal_out = propagate(a, signal_in)
 
-          signal_tx = a.txFIR([a.preamble; signal_in; a.preamble]);
-          signal_tx = 2*signal_tx(51 + (a.plen/2)*a.ss : ...
-              50 + end - (a.plen/2)*a.ss);
-            
+          signal_whole = [a.preamble(a.plen/2+1:end);...
+              signal_in; a.preamble(1:a.plen/2)];
+          signal_tx =  circshift(a.txFIR(signal_whole), -a.flen);
+          
           % transmits signal
           a.tx.transmitRepeat(signal_tx);
           
@@ -132,28 +137,35 @@ classdef DSP_class
       
       function [preamble_cond, signal_cond] = conditioning(a, signal_out)
           
-          signal_synt = a.syntonize(signal_out);
-          signal_sync = a.synchronize(signal_synt);
-
-          [~, slope] = a.slope_detector(imag(signal_sync));
-          [~, index] = max(slope);
-          align = mod(index - a.ss/2, a.ss);
-          signal_align = signal_out(1+align:end+align-a.ss);
-
-          signal_filtered = 2*a.rxFIR(signal_align);
+%           signal_synt = a.syntonize(signal_out);
+%           signal_sync = a.synchronize(signal_synt);
+          signal_sync = signal_out;
             
           % locating the preamble
-          [~, correlation] = a.preamble_detector(signal_filtered);
-          [~, index] = maxk(correlation, 2);
+          [~, correlation] = a.preamble_detector(signal_sync);
+          [~, index] = maxk(correlation, 8);
+                    
+          align = mod(index(1), a.ss) + a.flen;
+%           signal_align = signal_sync(align:end + align - a.ss);
+          signal_align = circshift(signal_sync, - align);
+          a.rxFIR(signal_align(end - ceil(a.flen/a.ss)*a.ss + 1:end)); 
+          signal_filtered = 2*a.rxFIR(signal_align);
+          
+          index = int32((index - mod(index(1), a.ss))./a.ss);
+          
           data_end = index(1) + a.mlen;
-          if data_end <= length(signal_filtered)
+          if data_end <= length(signal_filtered) && index(1) - a.plen  > 1
               data_start = index(1) + 1;
-          else
-              data_end = index(2) + a.mlen;
-              data_start = index(2) + 1;
+          else 
+              i = 1;
+              while abs(index(i)-index(1)) < a.mlen + a.plen - 1
+                  i = i + 1;
+              end
+              data_end = index(i) + a.mlen;
+              data_start = index(i) + 1;
           end
           preamble_start = data_start - a.plen;
-          
+                             
           % phase correction 2.0 (corrects only by n*pi/4 where n is int)
           preamble_filtered = signal_filtered(preamble_start:data_start-1);
 

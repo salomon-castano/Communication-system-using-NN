@@ -2,15 +2,16 @@ close ('all'); %clearvars;
 %% Initialization parameters
 
 % message to be transmitted
-message = 'Once upon time there was a devil devil class called DSP';
+message = '123 abc @#$ Ë‡ÚÏ ‡FJefk Údfn kjafnjnKJDN als 123 abc @#$ Ë‡ÚÏ';
 
 a = DSP_class();
 a.fc = 868e6;       % carrier frequency in Hz
 a.rb = 50e3;        % symbols (bits) per second
 a.ss = 8;           % samples per symbol
+a.fco = 1;        % normalized cutoff frequency 
 a.QAM = 4;          % size of QAM constellation
 a.plen = 1*26;      % preamble length must be multiple of 2
-a.delay = 50;      % approximate delay of the transmitter (simulation)
+a.delay = 50;       % approximate delay of the transmitter (simulation)
 a = a.setup(message);
 
 %% Propagation
@@ -32,5 +33,5 @@ sprintf(message_out)
 figure(1)
 plot(real(preamble_cond))
 figure(2)
-plot(imag(signal_out))
+plot(real(signal_out))
 scatterplot(signal_cond)
