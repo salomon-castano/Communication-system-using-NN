@@ -1,17 +1,20 @@
-close ('all'); %clearvars;
+close ('all'); clearvars;
 %% Initialization parameters
 
 % message to be transmitted
-message = '123 abc @#$ Ë‡ÚÏ ‡FJefk Údfn kjafnjnKJDN als 123 abc @#$ Ë‡ÚÏ';
+message = 'HabÌa una vez una iguana, con una ruana de lana, peinandose';
 
 a = DSP_class();
+a.QAM = 16;          % size of QAM constellation
+a.amp = sqrt(a.QAM)-1; % amplitude of the QAM constellation
 a.fc = 868e6;       % carrier frequency in Hz
-a.rb = 50e3;        % symbols (bits) per second
-a.ss = 8;           % samples per symbol
-a.fco = 1;        % normalized cutoff frequency 
-a.QAM = 4;          % size of QAM constellation
+a.rb = 50e3/a.amp;  % symbols (bits) per second
+a.ss = 8*a.amp;     % samples per symbol
+a.fco = 0.72;        % normalized cutoff frequency for the FIR filters
 a.plen = 1*26;      % preamble length must be multiple of 2
-a.delay = 50;       % approximate delay of the transmitter (simulation)
+a.filter = 'FIR';   % type of filter FIR or COS
+a.fshift = 0;       % frequency shift (simulation)
+a.pshift = 0;       % phase shift (simulation)
 a = a.setup(message);
 
 %% Propagation
