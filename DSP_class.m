@@ -5,12 +5,14 @@ properties
     fc = 868e6;       % carrier frequency in Hz
     rb = 50e3;        % symbols (bits) per second
     ss = 8;           % samples per symbol
-    fco = 1;          % normalized cutoff frequency 
+    fco = 1;          % normalized cutoff frequency for FIR
+    fspan = 1;        % Raised cosine filter span in symbols
     QAM = 4;          % size of QAM constellation
     plen = 26;        % preamble length
     fshift = 0;       % frequency shift (simulation)
     pshift = 0;       % phase shift (simulation)
     filter = 'COS';   % type of filter 
+    txGain = -20;     % transmitter gain (dB)
     amp               % amplitude of the QAM constellation
     fs                % samples per frame
     rs                % samples per second
@@ -26,6 +28,7 @@ properties
     rxRawFilter
     tx
     rx
+    spectrum
     pfo
     channel
     syntonize
@@ -37,6 +40,8 @@ methods
 function a = setup(a, message) 
   
     % dependable var and System Objects initicalization
+
+    a.amp = ceil(sqrt(a.QAM)-1); % amplitude of the QAM constellation
             
     a.rs = a.ss*a.rb;   % samples per second
     
@@ -66,31 +71,39 @@ function a = setup(a, message)
              2*a.fco/a.ss, 1], [1 1 0 0], [1 1]));
                     
         a.rxRawFilter = dsp.FIRDecimator('DecimationFactor', a.ss,...
-            'Numerator', firpm(2*a.flen,[0 a.fco/a.ss 2*a.fco/a.ss,...
-            1], [1 1 0 0], [1 1]));
+            'Numerator', firpm(2*a.flen,[0 a.fco/a.ss, ...
+            2*a.fco/a.ss, 1], [1 1 0 0], [1 1]));
 
     elseif strcmp(a.filter,'COS')
     
-        a.flen = a.ss/2;
+        a.flen = ceil(((a.fspan)*a.ss)/2);
 
         a.txRawFilter = comm.RaisedCosineTransmitFilter( ...
             'OutputSamplesPerSymbol',a.ss,...
-            'FilterSpanInSymbols',1);
+            'FilterSpanInSymbols',a.fspan);
         
         a.rxRawFilter = comm.RaisedCosineReceiveFilter(...
             'InputSamplesPerSymbol',a.ss,'DecimationFactor',a.ss,...
-            'FilterSpanInSymbols',1);
+            'FilterSpanInSymbols',a.fspan);
     else
         error('Filter type %s is not supported', a.filter)
     end
-                
+    
+    warning('off','plutoradio:sysobj:FirmwareIncompatible');
     a.tx = sdrtx('Pluto', 'CenterFrequency', a.fc,...
-        'BasebandSampleRate', a.rs, 'Gain', -20);
+        'BasebandSampleRate', a.rs, 'Gain', a.txGain);
 
     a.rx = sdrrx('Pluto', 'CenterFrequency', a.fc,...
         'BasebandSampleRate', a.rs, 'GainSource', ...
-        'Manual', 'Gain', 20, 'SamplesPerFrame',...
+        'Manual', 'Gain', min(-a.txGain,70)+3, 'SamplesPerFrame',...
         a.fs, 'OutputDataType', 'single');
+
+    a.spectrum = dsp.SpectrumAnalyzer(...
+        'Name', 'Spectrum Analyzer Modulated',...
+        'Title', 'Spectrum Analyzer Modulated',...
+        'SpectrumType', 'Power',...
+        'FrequencySpan', 'Full',...
+        'SampleRate', a.rs);
                           
     a.syntonize = comm.CoarseFrequencyCompensator(...
         'SampleRate',a.rs, 'FrequencyResolution',1);
@@ -111,17 +124,17 @@ function a = setup(a, message)
 end
 
 function signal_in = encode(a, message)
-  
+    
+%     m_dec = unicode2native(message);
+%     m_QAM = cnvbase(m_dec, uint8(0:255), uint8(0:a.QAM-1))';
+
     % encodes the message into a vector using ASCII in base a.QAM
     m = dec2base(message, a.QAM, a.ls);
     m = reshape(m', numel(m), []);
     signal_dec = base2dec(m, a.QAM);
     
     % applies QAM mapping
-    QAM_signal = qammod(signal_dec, a.QAM);
-    
-    % inerpolation and optimal filter for ISI
-    signal_in = QAM_signal;    
+    signal_in = qammod(signal_dec, a.QAM);  
   
 end
 
@@ -149,7 +162,8 @@ function signal_out = simulate(a, signal_in)
   
 end
 
-function [preamble_cond, signal_cond] = conditioning(a, signal_out)
+function [preamble_cond, signal_cond, phase_offset]...
+        = conditioning(a, signal_out)
   
 %     signal_synt = a.syntonize(signal_out);
 %     signal_sync = a.synchronize(signal_synt);
@@ -157,7 +171,7 @@ function [preamble_cond, signal_cond] = conditioning(a, signal_out)
     
     % locating the preamble
     [~, correlation] = a.preamble_detector(signal_out);
-    [~, index] = maxk(correlation, 8);
+    [~, index] = maxk(correlation, 3*a.ss);
             
     align = mod(index(1), a.ss);
     index = int32((index - align)/a.ss);
@@ -165,7 +179,7 @@ function [preamble_cond, signal_cond] = conditioning(a, signal_out)
     signal_filtered = a.rxFilter(signal_aligned);
     
     data_end = index(1) + a.mlen;
-    if data_end <= length(signal_filtered) && index(1) - a.plen  > 1
+    if data_end <= length(signal_out)/a.ss && index(1)+1 - a.plen  >= 1
         data_start = index(1) + 1;
     else 
       i = 1;
@@ -179,18 +193,26 @@ function [preamble_cond, signal_cond] = conditioning(a, signal_out)
     preamble_start = data_start - a.plen;
                      
     % phase correction 2.0
-    preamble_filtered = signal_filtered(preamble_start:data_start-1);
+%     preamble_filtered = signal_filtered(preamble_start:data_start-1);
+
+    preamble_aligned = signal_aligned(a.ss*(preamble_start-1)+1:...
+        a.ss*(data_start-1));
+    preamble_filtered = a.rxFilter(preamble_aligned);
+%     plot(real(preamble_filtered))
+%     hold on
+%     plot(real(preamble_filtered1))
+%     plot(real(a.preamble*0.22))
     
-    phase_offset = (mean(exp(1i*(angle(a.preamble(...
-        end-a.plen+1:end)) - angle(preamble_filtered)))));
-    signal_sync =signal_filtered.*phase_offset;
+    phase_offset = mean(exp(1i*(angle(a.preamble(...
+        3:end-2)) - angle(preamble_filtered(3:end-2))))) +0.0375*1i;
+    signal_sync =signal_filtered*phase_offset;
 
     % position correction
     real_shift = max(real(signal_sync)) + min(real(signal_sync));
     imag_shift = max(imag(signal_sync)) + min(imag(signal_sync));
 
     signal_scaled = signal_sync - (real_shift + 1i*imag_shift)/2;
-    signal_cond_whole = a.amp*signal_scaled/max(real(signal_scaled));
+    signal_cond_whole = 1.1*a.amp*signal_scaled/max(real(signal_scaled));
     
     signal_cond = signal_cond_whole(data_start:data_end);
     preamble_cond = signal_cond_whole(preamble_start:data_start-1);
