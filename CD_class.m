@@ -1,4 +1,4 @@
-classdef DSP_class
+classdef CD_class
 properties
    
     % default values

@@ -96,12 +96,12 @@ function a = setup(a)
         'Manual', 'SamplesPerFrame',...
         a.fs, 'OutputDataType', 'single');
 
-    a.spectrum = dsp.SpectrumAnalyzer(...
-        'Name', 'Spectrum Analyzer Modulated',...
-        'Title', 'Spectrum Analyzer Modulated',...
-        'SpectrumType', 'Power',...
-        'FrequencySpan', 'Full',...
-        'SampleRate', a.rs);
+%     a.spectrum = dsp.SpectrumAnalyzer(...
+%         'Name', 'Spectrum Analyzer Modulated',...
+%         'Title', 'Spectrum Analyzer Modulated',...
+%         'SpectrumType', 'Power',...
+%         'FrequencySpan', 'Full',...
+%         'SampleRate', a.rs);
                           
     a.syntonize = comm.CoarseFrequencyCompensator(...
         'SampleRate',a.rs, 'FrequencyResolution',1);
@@ -120,15 +120,18 @@ end
 
 function signal_out = propagate(a, signal_in)
 
-    signal_whole = signal_in;
+    signal_whole = [a.preamble; signal_in];
     signal_tx = a.txFilter(signal_whole);
     signal_out = signal_tx;
     a.tx.Gain = min(a.SNR - 89.75, 0);         % transmitter gain 87 ideal
     a.rx.Gain = ceil(min(89.75 - a.SNR, 71));  % receiver gain (dB)
     % transmits signal
-    evalc('a.tx.transmitRepeat(signal_tx)');
+   evalc('transmitRepeat(a.tx, signal_tx);');
     
     % receives signal
+    for k=1:7
+        evalc('a.rx()');
+    end 
     evalc('signal_out = a.rx()');
   
 end
@@ -136,7 +139,7 @@ end
 function signal_out = simulate(a, signal_in)
     
     a.channel.EbNo = a.SNR;
-    signal_whole = [signal_in; signal_in];
+    signal_whole = [a.preamble; signal_in; a.preamble; signal_in];
     signal_tx = a.txFilter(signal_whole);
     signal_tx = circshift(signal_tx, randi([0,a.fs],1));
     
@@ -165,13 +168,14 @@ function [signal_scaled, signal_cond, phase_offset] = ...
         i = i + 1;
         if i >=  4*a.ss
             index(i) = a.plen;
+%             signal_filtered = signal_filtered*0 + 0.01+0.01i;
         end
     end
     data_end = index(i) + a.mlen;
     data_start = index(i) + 1;
     preamble_start = data_start - a.plen;
                      
-    % phase correction 2.0
+    % phase correction
 
     preamble_aligned = signal_aligned(a.ss*(preamble_start-1)+1:...
         a.ss*(data_start-1));
@@ -179,9 +183,9 @@ function [signal_scaled, signal_cond, phase_offset] = ...
     
     phase_offset = mean(exp(1i*(angle(a.preamble(...
         3:end-2)) - angle(preamble_filtered(3:end-2)))));
-    signal_sync = signal_aligned(a.ss*(preamble_start-1)+1:a.ss*data_end)...
+    signal_sync = signal_aligned(a.ss*(data_start-1)+1:a.ss*data_end)...
         *phase_offset;
-    signal_syncf = signal_filtered(preamble_start:data_end)*phase_offset;
+    signal_syncf = signal_filtered(data_start:data_end)*phase_offset;
 
     signal_mean = mean(signal_syncf);
     signal_std = std(signal_syncf);
