@@ -31,8 +31,8 @@ predictions_flat = reshape(predictions{:,1}(:,ss/2:ss:end)', [], 1);
 
 for j = 1:length(error_net)
 range = [plot_step*(j-1), min(plot_step*j-1, max_range)];
-i_min = floor((range(1) - min_range)/span*len/step)*step + 1;
-i_max = ceil((range(2) - min_range)/span*len/step + 1)*step;
+i_min = floor((range(1))/span*len/step)*step + 1;
+i_max = ceil((range(2))/span*len/step + 1)*step;
 
 i = i_min:i_max;
 i_flat = (i_min-1)*samples+1:i_max*samples;
@@ -50,10 +50,10 @@ figure
 semilogy(SNR, error_net/4, SNR, error_fir/4, SNR, error_sim/4) %, ...
 %     SNR, 2/3*qfunc(sqrt(3*10.^(SNR/10)/15)))
 % xlim([0, 28])
-ylim([1e-4, 1])
+% ylim([1e-4, 1])
 xlabel('SNR (dB)')
 ylabel('BER')
-title(['test set: ' strrep(test_set, '_',' ')])
+% title(['test set: ' strrep(test_set, '_',' ')])
 legend(['Net: ' strrep(net_name, '_',' ')],'FIR decoder',...
     'Simulation of FIR decoder')
 

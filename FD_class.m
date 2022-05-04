@@ -1,18 +1,18 @@
-classdef CD_class
+classdef FD_class
 properties
    
     % default values
     fc = 868e6;       % carrier frequency in Hz
     rb = 50e3;        % symbols (bits) per second
     ss = 8;           % samples per symbol
-    fco = 1;          % normalized cutoff frequency for FIR
+    fco = 23/32;      % normalized cutoff frequency for FIR
     fspan = 1;        % Raised cosine filter span in symbols
     QAM = 4;          % size of QAM constellation
     plen = 26;        % preamble length
     fshift = 0;       % frequency shift (simulation)
     pshift = 0;       % phase shift (simulation)
-    filter = 'COS';   % type of filter 
-    txGain = -20;     % transmitter gain (dB)
+    filter = 'FIR';   % type of filter 
+    SNR = 40;         % Signal to noise ratio
     amp               % amplitude of the QAM constellation
     fs                % samples per frame
     rs                % samples per second
@@ -20,20 +20,22 @@ properties
     mlen              % message length
     flen              % FIR filters length
     preamble          % preamble
+    m_mean            % QAM message mean
+    m_std             % QAM message standard deviation
     
     % dependable variables and System Objects
     
-    preamble_maker
-    txRawFilter
-    rxRawFilter
-    tx
-    rx
-    spectrum
-    pfo
-    channel
-    syntonize
-    synchronize
-    preamble_detector
+    preamble_maker  % makes the preamble
+    txRawFilter     % transmitter FIR filter
+    rxRawFilter     % receiver FIR filter
+    tx              % transmitter
+    rx              % receiver
+    spectrum        % specctrum scope
+    pfo             % introduces phase and frequency offset (simulation)
+    channel         % simulation channel
+    preamble_detector      % detects the preamble
+%     syntonize       
+%     synchronize
    
 end
 methods
@@ -50,13 +52,14 @@ function a = setup(a, message)
     a.mlen = length(message)*a.ls; % message length in QAM symbols
           
     a.preamble_maker = comm.BarkerCode('SamplesPerFrame',...
-    a.plen, 'Length',13); 
+    a.plen/2, 'Length',13); 
    
     if a.QAM > 2
        a.preamble = a.amp*complex(a.preamble_maker(),...
            fliplr(a.preamble_maker()')');
+       a.preamble = [a.preamble; -a.preamble];
     else
-       a.preamble = a.preamble_maker();
+       a.preamble = [a.preamble_maker(); -a.preamble_maker()];
     end
    
     % samples per frame
@@ -90,26 +93,30 @@ function a = setup(a, message)
     end
     
     warning('off','plutoradio:sysobj:FirmwareIncompatible');
+    
     a.tx = sdrtx('Pluto', 'CenterFrequency', a.fc,...
-        'BasebandSampleRate', a.rs, 'Gain', a.txGain);
+        'BasebandSampleRate', a.rs);
 
     a.rx = sdrrx('Pluto', 'CenterFrequency', a.fc,...
         'BasebandSampleRate', a.rs, 'GainSource', ...
-        'Manual', 'Gain', min(-a.txGain,70)+3, 'SamplesPerFrame',...
+        'Manual', 'SamplesPerFrame',...
         a.fs, 'OutputDataType', 'single');
+    
+    a.tx.Gain = min(a.SNR - 89.75, 0);         % transmitter gain 87 ideal
+    a.rx.Gain = ceil(min(89.75 - a.SNR, 71));  % receiver gain (dB)
 
     a.spectrum = dsp.SpectrumAnalyzer(...
-        'Name', 'Spectrum Analyzer Modulated',...
-        'Title', 'Spectrum Analyzer Modulated',...
+        'Name', 'Spectrum Analyzer demodulated',...
+        'Title', 'Demodulated Signal',...
         'SpectrumType', 'Power',...
         'FrequencySpan', 'Full',...
         'SampleRate', a.rs);
                           
-    a.syntonize = comm.CoarseFrequencyCompensator(...
-        'SampleRate',a.rs, 'FrequencyResolution',1);
-    
-    a.synchronize = comm.CarrierSynchronizer( ...
-        'SamplesPerSymbol',a.ss);
+%     a.syntonize = comm.CoarseFrequencyCompensator(...
+%         'SampleRate',a.rs, 'FrequencyResolution',1);
+%     
+%     a.synchronize = comm.CarrierSynchronizer( ...
+%         'SamplesPerSymbol',a.ss);
     
     a.preamble_detector = comm.PreambleDetector(a.txFilter(...
         a.preamble), 'Threshold', 3,'Detections','All');
@@ -142,12 +149,15 @@ function signal_out = propagate(a, signal_in)
 
     signal_whole = [a.preamble; signal_in];
     signal_tx = a.txFilter(signal_whole);
-    
+    signal_out = signal_tx;
     % transmits signal
-    a.tx.transmitRepeat(signal_tx);
+   evalc('transmitRepeat(a.tx, signal_tx);');
     
     % receives signal
-    signal_out = a.rx();
+    for k=1:7
+        evalc('a.rx()');
+    end 
+    evalc('signal_out = a.rx()');
   
 end
 
@@ -162,66 +172,65 @@ function signal_out = simulate(a, signal_in)
   
 end
 
-function [preamble_cond, signal_cond, phase_offset]...
-        = conditioning(a, signal_out)
+function [signal_FD, signal_net, phase_offset] = ...
+        conditioning(a, signal_out)
   
-%     signal_synt = a.syntonize(signal_out);
-%     signal_sync = a.synchronize(signal_synt);
-%     signal_out = signal_sync;
+%     signal_out = a.syntonize(signal_out);
     
     % locating the preamble
     [~, correlation] = a.preamble_detector(signal_out);
-    [~, index] = maxk(correlation, 3*a.ss);
+    [~, index1] = maxk(correlation, 4*a.ss);
             
-    align = mod(index(1), a.ss);
-    index = int32((index - align)/a.ss);
+    align = mod(index1(1), a.ss);
+    index = int32((index1 - align)/a.ss);
     signal_aligned = circshift(signal_out, - align);
     signal_filtered = a.rxFilter(signal_aligned);
-    
-    data_end = index(1) + a.mlen;
-    if data_end <= length(signal_out)/a.ss && index(1)+1 - a.plen  >= 1
-        data_start = index(1) + 1;
-    else 
-      i = 1;
-      while abs(index(i)-index(1)) < a.mlen + a.plen - 1
+        
+    i = 1;
+    while not(index(i) + a.mlen <= length(signal_out)/a.ss && ...
+            index(i)+1 - a.plen  >= 1)
         i = i + 1;
-      end
-      data_end = index(i) + a.mlen;
-      data_start = index(i) + 1;
+        if i >=  4*a.ss
+            error('The preamble could not be found')
+        end
     end
-
+    data_end = index(i) + a.mlen;
+    data_start = index(i) + 1;
     preamble_start = data_start - a.plen;
                      
     % phase correction 2.0
-%     preamble_filtered = signal_filtered(preamble_start:data_start-1);
 
     preamble_aligned = signal_aligned(a.ss*(preamble_start-1)+1:...
         a.ss*(data_start-1));
     preamble_filtered = a.rxFilter(preamble_aligned);
-%     plot(real(preamble_filtered))
-%     hold on
-%     plot(real(preamble_filtered1))
-%     plot(real(a.preamble*0.22))
+    preamble_mean = mean(preamble_filtered);
+    preamble_std = std(preamble_filtered);
+    preamble_scaled = (preamble_filtered-preamble_mean)/preamble_std;
     
     phase_offset = mean(exp(1i*(angle(a.preamble(...
-        3:end-2)) - angle(preamble_filtered(3:end-2))))) +0.0375*1i;
-    signal_sync =signal_filtered*phase_offset;
-
-    % position correction
-    real_shift = max(real(signal_sync)) + min(real(signal_sync));
-    imag_shift = max(imag(signal_sync)) + min(imag(signal_sync));
-
-    signal_scaled = signal_sync - (real_shift + 1i*imag_shift)/2;
-    signal_cond_whole = 1.1*a.amp*signal_scaled/max(real(signal_scaled));
+        3:end-2)) - angle(preamble_scaled(3:end-2)))));
     
-    signal_cond = signal_cond_whole(data_start:data_end);
-    preamble_cond = signal_cond_whole(preamble_start:data_start-1);
+    real_shift = max(real(signal_filtered)) + min(real(signal_filtered));
+    imag_shift = max(imag(signal_filtered)) + min(imag(signal_filtered));
+
+    signal_scaledf = signal_filtered - (real_shift + 1i*imag_shift)/2;
+    signal_scaled = signal_aligned - (real_shift + 1i*imag_shift)/2;
+    
+    signal_sync = signal_scaled(a.ss*(preamble_start-1)+1:a.ss*data_end)...
+        *phase_offset;
+    signal_syncf = signal_scaledf(data_start:data_end)*phase_offset;
+
+    signal_mean = mean(signal_syncf);
+    signal_std = std(signal_syncf);
+
+    signal_FD = a.m_std*(signal_syncf-signal_mean)/signal_std+a.m_mean;
+    signal_net = a.m_std*(signal_sync-signal_mean)/signal_std+a.m_mean;
     
 end 
 
-function message_out = decode(a, signal)
+function message_out = decode(a, signal_QAM)
   
-    z = dec2base(qamdemod(signal,a.QAM), a.QAM);
+    z = dec2base(signal_QAM, a.QAM);
     z = reshape(z, a.ls, [])';
     message_out = char(base2dec(z,a.QAM))';
   
@@ -249,8 +258,8 @@ function release(a)
     release(a.rx)
     release(a.pfo)
     release(a.channel)
-    release(a.syntonize)
-    release(a.synchronize)
+%     release(a.syntonize)
+%     release(a.synchronize)
     release(a.preamble_detector)
       
   end         

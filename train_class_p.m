@@ -1,8 +1,8 @@
-classdef train_class
+classdef train_class_p
 properties
    
     % default values
-    mlen = 96;        % length of the message in QAM symbols
+    mlen = randi([10,20],1); % length of the message in QAM symbols
     fc = 868e6;       % carrier frequency in Hz
     rb = 50e3;        % symbols (bits) per second
     ss = 8;           % samples per symbol
@@ -11,7 +11,7 @@ properties
     plen = 26;        % preamble length
     fshift = 0;       % frequency shift (simulation)
     pshift = 0;       % phase shift (simulation)
-    filter = 'FIR';   % type of filter 
+    filter = 'COS';   % type of filter 
     SNR = 20;         % Signal to noise ratio
     setlen = 100;     % length of the trainig set (num of examples) 
     amp               % amplitude of the QAM constellation
@@ -120,13 +120,13 @@ end
 
 function signal_out = propagate(a, signal_in)
 
-    signal_whole = [a.preamble; signal_in];
+    signal_whole = signal_in;
     signal_tx = a.txFilter(signal_whole);
     signal_out = signal_tx;
     a.tx.Gain = min(a.SNR - 89.75, 0);         % transmitter gain 87 ideal
     a.rx.Gain = ceil(min(89.75 - a.SNR, 71));  % receiver gain (dB)
     % transmits signal
-   evalc('transmitRepeat(a.tx, signal_tx);');
+    evalc('a.tx.transmitRepeat(signal_tx)');
     
     % receives signal
     for k=1:7
@@ -139,7 +139,7 @@ end
 function signal_out = simulate(a, signal_in)
     
     a.channel.EbNo = a.SNR;
-    signal_whole = [a.preamble; signal_in; a.preamble; signal_in];
+    signal_whole = [signal_in; signal_in];
     signal_tx = a.txFilter(signal_whole);
     signal_tx = circshift(signal_tx, randi([0,a.fs],1));
     
@@ -168,14 +168,13 @@ function [signal_scaled, signal_cond, phase_offset] = ...
         i = i + 1;
         if i >=  4*a.ss
             index(i) = a.plen;
-%             signal_filtered = signal_filtered*0 + 0.01+0.01i;
         end
     end
     data_end = index(i) + a.mlen;
     data_start = index(i) + 1;
     preamble_start = data_start - a.plen;
                      
-    % phase correction
+    % phase correction 2.0
 
     preamble_aligned = signal_aligned(a.ss*(preamble_start-1)+1:...
         a.ss*(data_start-1));
@@ -183,9 +182,9 @@ function [signal_scaled, signal_cond, phase_offset] = ...
     
     phase_offset = mean(exp(1i*(angle(a.preamble(...
         3:end-2)) - angle(preamble_filtered(3:end-2)))));
-    signal_sync = signal_aligned(a.ss*(data_start-1)+1:a.ss*data_end)...
+    signal_sync = signal_aligned(a.ss*(preamble_start-1)+1:a.ss*data_end)...
         *phase_offset;
-    signal_syncf = signal_filtered(data_start:data_end)*phase_offset;
+    signal_syncf = signal_filtered(preamble_start:data_end)*phase_offset;
 
     signal_mean = mean(signal_syncf);
     signal_std = std(signal_syncf);
