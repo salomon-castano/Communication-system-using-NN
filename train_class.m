@@ -124,7 +124,7 @@ function signal_out = propagate(a, signal_in)
     signal_tx = a.txFilter(signal_whole);
     signal_out = signal_tx;
     a.tx.Gain = min(a.SNR - 89.75, 0);         % transmitter gain 87 ideal
-    a.rx.Gain = ceil(min(89.75 - a.SNR, 71));  % receiver gain (dB)
+    a.rx.Gain = ceil(min(89.75 - a.SNR, 62));  % receiver gain (dB)
     % transmits signal
    evalc('transmitRepeat(a.tx, signal_tx);');
     

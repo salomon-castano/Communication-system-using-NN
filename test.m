@@ -49,7 +49,7 @@ SNR = min_range:plot_step:max_range;
 figure
 semilogy(SNR, error_net/4, SNR, error_fir/4, SNR, error_sim/4) %, ...
 %     SNR, 2/3*qfunc(sqrt(3*10.^(SNR/10)/15)))
-% xlim([0, 28])
+% xlim([0, 25])
 % ylim([1e-4, 1])
 xlabel('SNR (dB)')
 ylabel('BER')
@@ -57,17 +57,17 @@ ylabel('BER')
 legend(['Net: ' strrep(net_name, '_',' ')],'FIR decoder',...
     'Simulation of FIR decoder')
 
-% SNR_cut = 20;
-% index = floor((len-1)*(SNR_cut+1)/span) + 1;
-% figure
-% plot(predictions{index,1})
-% hold on
-% plot(repelem(data_set.labels(index,:), ss))
-% hold off
-% ylabel('QAM symbol')
-% xlabel('Sample')
-% legend('Prediction', 'Label')
-% title('SNR = '+string(data_set.SNR(index)))
+SNR_cut = 20;
+index = floor((len-1)*(SNR_cut+1)/span) + 1;
+figure
+plot(predictions{index,1})
+hold on
+plot(repelem(data_set.labels(index,:), ss))
+hold off
+ylabel('QAM symbol')
+xlabel('Sample')
+legend('Prediction', 'Label')
+title('SNR = '+string(data_set.SNR(index)))
 
 % figure
 % plotconfusion(predictions_flat, labels)

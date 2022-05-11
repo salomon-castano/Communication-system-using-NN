@@ -12,7 +12,7 @@ properties
     fshift = 0;       % frequency shift (simulation)
     pshift = 0;       % phase shift (simulation)
     filter = 'FIR';   % type of filter 
-    SNR = 40;         % Signal to noise ratio
+    SNR = 30;         % Signal to noise ratio
     amp               % amplitude of the QAM constellation
     fs                % samples per frame
     rs                % samples per second
@@ -102,8 +102,8 @@ function a = setup(a, message)
         'Manual', 'SamplesPerFrame',...
         a.fs, 'OutputDataType', 'single');
     
-    a.tx.Gain = min(a.SNR - 89.75, 0);         % transmitter gain 87 ideal
-    a.rx.Gain = ceil(min(89.75 - a.SNR, 71));  % receiver gain (dB)
+    a.tx.Gain = min(a.SNR - 99.75, 0);         % transmitter gain 87 ideal
+    a.rx.Gain = ceil(min(99.75 - a.SNR, 62));  % receiver gain (dB)
 
     a.spectrum = dsp.SpectrumAnalyzer(...
         'Name', 'Spectrum Analyzer demodulated',...
@@ -126,7 +126,7 @@ function a = setup(a, message)
    a.pfo = comm.PhaseFrequencyOffset('PhaseOffset', a.pshift,...
        'FrequencyOffset', a.fshift, 'SampleRate',a.rs);
    % Decrease EbNo to degrade signal
-   a.channel=comm.AWGNChannel('SamplesPerSymbol',a.ss,'EbNo',50);
+   a.channel=comm.AWGNChannel('SamplesPerSymbol',a.ss,'EbNo',a.SNR);
     
 end
 
@@ -212,9 +212,10 @@ function [signal_FD, signal_net, phase_offset] = ...
     
     real_shift = max(real(signal_filtered)) + min(real(signal_filtered));
     imag_shift = max(imag(signal_filtered)) + min(imag(signal_filtered));
+    k = 1; %std(signal_aligned)/std(signal_filtered);
 
     signal_scaledf = signal_filtered - (real_shift + 1i*imag_shift)/2;
-    signal_scaled = signal_aligned - (real_shift + 1i*imag_shift)/2;
+    signal_scaled = signal_aligned - k*(real_shift + 1i*imag_shift)/2;
     
     signal_sync = signal_scaled(a.ss*(preamble_start-1)+1:a.ss*data_end)...
         *phase_offset;
@@ -224,7 +225,7 @@ function [signal_FD, signal_net, phase_offset] = ...
     signal_std = std(signal_syncf);
 
     signal_FD = a.m_std*(signal_syncf-signal_mean)/signal_std+a.m_mean;
-    signal_net = a.m_std*(signal_sync-signal_mean)/signal_std+a.m_mean;
+    signal_net = a.m_std*(signal_sync-signal_mean*k)/(signal_std*k)+a.m_mean;
     
 end 
 
@@ -249,7 +250,7 @@ function signal_out = rxFilter(a, signal)
     signal_aligned = circshift(signal, -a.flen);
     a.rxRawFilter(signal_aligned(end - ceil(a.flen/a.ss)*a.ss + 1:end));
     signal_filtered = a.rxRawFilter(signal_aligned);
-    signal_out = signal_filtered/max(abs(signal_filtered));
+    signal_out = signal_filtered; %/max(abs(signal_filtered));
 end
         
 function release(a)

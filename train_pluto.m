@@ -13,7 +13,7 @@ a.filter = 'FIR';   % type of filter FIR or COS
 a.fshift = 0;     % frequency shift
 a.pshift = 123;       % phase shift (simulation)
 a.mlen = a.QAM*6;   % length of the message in QAM symbols
-ds = -1;
+ds = 0;
 step = 100;
 a.setlen = 2*step;     % length of the trainig set (num of examples) 
 a = a.setup();
@@ -75,7 +75,7 @@ a.release(); % releases system objects
 %% Postprocessing
 
 figure
-plot(real(signal_out*phase_offset))
+plot(real(signal_scaled))
 scatterplot(signal_cond)
 figure
 scatter(messageQAM, messageQAM_out,'filled')
@@ -84,7 +84,7 @@ scatter(messageQAM, messageQAM_out,'filled')
 figure
 scatter(data_set.SNR,data_set.SER,'filled')
 hold on
-scatter(sim_set.SNR,sim_set.SER)
+% scatter(sim_set.SNR,sim_set.SER)
 scatter(noise_set.SNR,noise_set.SER,'cyan')
 plot(data_set.SNR,max(min(min(1.55-(data_set.SNR+ds)/17, ...
     1.06-(data_set.SNR-1)/40), 0.97), 0.04))
